@@ -1,8 +1,7 @@
-"""Convex potentials with closed-form gradients.
+"""Convex potentials with closed-form gradients."""
 
-We intentionally avoid importing concrete implementations here so that the
-package remains import-safe while individual modules are added incrementally.
-"""
+from .base import Potential
+from .logsumexp import LogSumExpPotential
 
-__all__ = []
+__all__ = ["Potential", "LogSumExpPotential"]
 
