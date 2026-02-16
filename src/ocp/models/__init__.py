@@ -1,4 +1,6 @@
 """Model wrappers and helpers."""
 
-__all__ = []
+from .wrapper import PotentialModel
+
+__all__ = ["PotentialModel"]
 
