@@ -136,6 +136,19 @@ def run_experiment(
 
         loss_fn = lambda logits, targets: model.loss(logits, targets, reduction="mean")
 
+        # Epoch 0 (before training): evaluate initial model.
+        tr0 = eval_one_epoch(model=model, loader=train_loader, loss_fn=loss_fn, device=device_t)
+        te0 = eval_one_epoch(model=model, loader=test_loader, loss_fn=loss_fn, device=device_t)
+        metrics["train_loss"].append(tr0.loss)
+        metrics["train_acc"].append(tr0.acc)
+        metrics["test_loss"].append(te0.loss)
+        metrics["test_acc"].append(te0.acc)
+        print(
+            f"[{tag}] epoch {0:03d}/{epochs} | "
+            f"train loss {tr0.loss:.4f} acc {tr0.acc:.4f} | "
+            f"test loss {te0.loss:.4f} acc {te0.acc:.4f}"
+        )
+
         for ep in range(1, epochs + 1):
             tr = train_one_epoch(
                 model=model,
