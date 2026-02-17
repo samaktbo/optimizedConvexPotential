@@ -2,6 +2,7 @@
 
 from .base import Potential
 from .logsumexp import LogSumExpPotential
+from .moreau_max import MoreauMaxPotential
 
-__all__ = ["Potential", "LogSumExpPotential"]
+__all__ = ["Potential", "LogSumExpPotential", "MoreauMaxPotential"]
 
