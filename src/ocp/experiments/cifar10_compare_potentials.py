@@ -70,6 +70,7 @@ def run_experiment(
     which: Which,
     num_classes: int,
     lam: float,
+    moreau_lams: Optional[List[float]],
     epochs: int,
     batch_size: int,
     num_workers: int,
@@ -104,6 +105,8 @@ def run_experiment(
     train_loader, test_loader = build_cifar10_loaders(data_cfg)
 
     def _run_one(potential, *, tag: str, extra: Dict) -> Dict:
+        # Re-seed so all runs start from identical init (fair comparison).
+        _set_seed(seed)
         backbone = _build_resnet18_for_cifar(num_classes=num_classes)
         model = PotentialModel(backbone, potential).to(device_t)
 
@@ -169,13 +172,15 @@ def run_experiment(
             )
         )
     if which in ("moreau", "both"):
-        results.append(
-            _run_one(
-                MoreauMaxPotential(lam=lam),
-                tag=f"moreau_lam{lam:g}",
-                extra={"potential": "moreau_max", "lam": float(lam)},
+        lams = [lam] if (not moreau_lams) else list(moreau_lams)
+        for lam_i in lams:
+            results.append(
+                _run_one(
+                    MoreauMaxPotential(lam=lam_i),
+                    tag=f"moreau_lam{lam_i:g}",
+                    extra={"potential": "moreau_max", "lam": float(lam_i)},
+                )
             )
-        )
 
     if out_jsonl is not None:
         os.makedirs(os.path.dirname(os.path.abspath(out_jsonl)) or ".", exist_ok=True)
@@ -191,7 +196,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Compare LogSumExp vs Moreau-max potentials on CIFAR-10.")
     p.add_argument("--which", type=str, default="both", choices=["logsumexp", "moreau", "both"])
     p.add_argument("--num_classes", type=int, default=2)
-    p.add_argument("--lam", type=float, default=2.0, help="Moreau λ (only used for --which moreau/both).")
+    p.add_argument("--lam", type=float, default=2.0, help="Moreau λ (used if --moreau_lams is not provided).")
+    p.add_argument(
+        "--moreau_lams",
+        type=float,
+        nargs="*",
+        default=None,
+        help="If provided, run one Moreau experiment per λ value (e.g. --moreau_lams 1 2).",
+    )
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--num_workers", type=int, default=2)
@@ -216,6 +228,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         which=args.which,
         num_classes=args.num_classes,
         lam=args.lam,
+        moreau_lams=args.moreau_lams,
         epochs=args.epochs,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
