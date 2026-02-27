@@ -14,10 +14,11 @@ from ocp.data.cifar10 import Cifar10DataConfig, build_cifar10_loaders
 from ocp.models.wrapper import PotentialModel
 from ocp.potentials.logsumexp import LogSumExpPotential
 from ocp.potentials.moreau_max import MoreauMaxPotential
+from ocp.potentials.simplex_entropy_conjugate import SimplexEntropyConjugatePotential
 from ocp.train.loop import eval_one_epoch, train_one_epoch
 
 
-Which = Literal["logsumexp", "moreau", "both"]
+Which = Literal["logsumexp", "moreau", "simplex_entropy", "both"]
 OptimizerName = Literal["adamw", "sgd"]
 
 
@@ -194,6 +195,14 @@ def run_experiment(
                     extra={"potential": "moreau_max", "lam": float(lam_i)},
                 )
             )
+    if which in ("simplex_entropy", "both"):
+        results.append(
+            _run_one(
+                SimplexEntropyConjugatePotential(),
+                tag="simplex_entropy",
+                extra={"potential": "simplex_entropy_conjugate"},
+            )
+        )
 
     if out_jsonl is not None:
         os.makedirs(os.path.dirname(os.path.abspath(out_jsonl)) or ".", exist_ok=True)
@@ -206,8 +215,15 @@ def run_experiment(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Compare LogSumExp vs Moreau-max potentials on CIFAR-10.")
-    p.add_argument("--which", type=str, default="both", choices=["logsumexp", "moreau", "both"])
+    p = argparse.ArgumentParser(
+        description="Compare LogSumExp, Moreau-max, and simplex-entropy conjugate potentials on CIFAR-10."
+    )
+    p.add_argument(
+        "--which",
+        type=str,
+        default="both",
+        choices=["logsumexp", "moreau", "simplex_entropy", "both"],
+    )
     p.add_argument("--num_classes", type=int, default=2)
     p.add_argument("--lam", type=float, default=2.0, help="Moreau λ (used if --moreau_lams is not provided).")
     p.add_argument(

@@ -82,3 +82,48 @@ def _self_check_against_cross_entropy(
     b = F.cross_entropy(logits, targets, reduction="mean")
     torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-6)
 
+
+def _self_check_simplex_entropy_conjugate(
+    *,
+    device: Optional[str] = None,
+    dtype: torch.dtype = torch.float32,
+    seed: int = 0,
+) -> None:
+    """Sanity checks for simplex-entropy conjugate potential.
+
+    Checks:
+    - grad shape and simplex constraints
+    - autograd path through potential_nll
+    """
+    from ocp.potentials.simplex_entropy_conjugate import SimplexEntropyConjugatePotential
+
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    g = torch.Generator(device="cpu")
+    g.manual_seed(seed)
+
+    B, K = 16, 5  # K >= 3 required by the potential.
+    logits = torch.randn(B, K, generator=g, device=device, dtype=dtype, requires_grad=True)
+    targets = torch.randint(low=0, high=K, size=(B,), generator=g, device=device, dtype=torch.long)
+
+    pot = SimplexEntropyConjugatePotential()
+    p = pot.grad(logits.detach())
+    if p.shape != logits.shape:
+        raise ValueError(f"Expected grad shape {tuple(logits.shape)}, got {tuple(p.shape)}")
+    if (p < -1e-6).any():
+        raise ValueError("Simplex gradient has negative entries.")
+    torch.testing.assert_close(
+        p.sum(dim=1),
+        torch.ones(B, device=device, dtype=p.dtype),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+    loss = potential_nll(pot, logits, targets, reduction="mean")
+    loss.backward()
+    if logits.grad is None:
+        raise RuntimeError("Expected logits.grad to be populated after backward().")
+    if not torch.isfinite(logits.grad).all():
+        raise RuntimeError("Found non-finite gradients in logits.grad.")
+
