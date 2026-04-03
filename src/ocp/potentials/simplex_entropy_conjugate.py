@@ -70,12 +70,17 @@ class SimplexEntropyConjugatePotential(Potential):
     with a sorting-based active-set rule.
     """
 
-    def __init__(self, *, eps: float = 1e-12):
+    def __init__(self, *, lam: float = 1.0, eps: float = 1e-12):
+        if lam <= 0:
+            raise ValueError(f"lam must be > 0, got {lam}")
+        self.lam = float(lam)
         self.eps = float(eps)
 
     def grad(self, z: torch.Tensor) -> torch.Tensor:
         self._check_logits(z)
-        lam32 = _lambda_star_sorted(z, dim=self.spec.class_dim, eps=self.eps)
+        lam32 = _lambda_star_sorted(
+            z / self.lam, dim=self.spec.class_dim, eps=self.eps
+        )
         return lam32.to(dtype=z.dtype)
 
     def phi(self, z: torch.Tensor) -> torch.Tensor:
@@ -88,8 +93,9 @@ class SimplexEntropyConjugatePotential(Potential):
         A = (k - 2.0) / (k - 1.0)
         B = 1.0 / (k * (k - 1.0))
 
-        z32 = z.float()
+        z32 = z.float() / self.lam
         lam32 = _lambda_star_sorted(z32, dim=self.spec.class_dim, eps=self.eps)
         s = torch.clamp(A * lam32 + B, min=self.eps)
         h = (s * torch.log(s)).sum(dim=self.spec.class_dim) / (A * A)
-        return (z32 * lam32).sum(dim=self.spec.class_dim) - h
+        inner = (z32 * lam32).sum(dim=self.spec.class_dim) - h
+        return self.lam * inner

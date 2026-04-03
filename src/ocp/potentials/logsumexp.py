@@ -6,25 +6,31 @@ from .base import Potential
 
 
 class LogSumExpPotential(Potential):
-    r"""φ(z) = log \sum_k exp(z_k).
+    r"""φ(z) = λ log \sum_k exp(z_k / λ), λ > 0 (temperature-scaled log-sum-exp).
 
-    This is the standard softmax / cross-entropy potential.
+    For λ=1 this reduces to log \sum_k exp(z_k), the standard softmax / cross-entropy potential.
 
     - phi(z) uses a numerically-stable logsumexp.
-    - grad(z) computes softmax(z) in closed form (no autograd.grad).
+    - grad(z) computes softmax(z/λ) in closed form (no autograd.grad).
     """
+
+    def __init__(self, lam: float = 1.0):
+        if lam <= 0:
+            raise ValueError(f"lam must be > 0, got {lam}")
+        self.lam = float(lam)
 
     def phi(self, z: torch.Tensor) -> torch.Tensor:
         self._check_logits(z)
-        return torch.logsumexp(z, dim=self.spec.class_dim)
+        z32 = z.float()
+        return self.lam * torch.logsumexp(z32 / self.lam, dim=self.spec.class_dim)
 
     def grad(self, z: torch.Tensor) -> torch.Tensor:
         self._check_logits(z)
 
-        # Stable softmax: exp(z - max) / sum exp(z - max)
+        # Stable softmax: exp(z/λ - max) / sum exp(z/λ - max)
         # Compute in float32 for stability; cast back to original dtype.
         orig_dtype = z.dtype
-        z32 = z.float()
+        z32 = z.float() / self.lam
         zmax = z32.max(dim=self.spec.class_dim, keepdim=True).values
         exp = torch.exp(z32 - zmax)
         denom = exp.sum(dim=self.spec.class_dim, keepdim=True)

@@ -180,9 +180,9 @@ def run_experiment(
     if which in ("logsumexp", "both"):
         results.append(
             _run_one(
-                LogSumExpPotential(),
+                LogSumExpPotential(lam=lam),
                 tag="logsumexp",
-                extra={"potential": "logsumexp"},
+                extra={"potential": "logsumexp", "lam": float(lam)},
             )
         )
     if which in ("moreau", "both"):
@@ -198,9 +198,9 @@ def run_experiment(
     if which in ("simplex_entropy", "both"):
         results.append(
             _run_one(
-                SimplexEntropyConjugatePotential(),
+                SimplexEntropyConjugatePotential(lam=lam),
                 tag="simplex_entropy",
-                extra={"potential": "simplex_entropy_conjugate"},
+                extra={"potential": "simplex_entropy_conjugate", "lam": float(lam)},
             )
         )
 
@@ -225,7 +225,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["logsumexp", "moreau", "simplex_entropy", "both"],
     )
     p.add_argument("--num_classes", type=int, default=2)
-    p.add_argument("--lam", type=float, default=2.0, help="Moreau λ (used if --moreau_lams is not provided).")
+    p.add_argument(
+        "--lam",
+        type=float,
+        default=2.0,
+        help=(
+            "λ for temperature-scaled log-sum-exp, simplex-entropy conjugate, and Moreau-max "
+            "(Moreau only if --moreau_lams is not provided)."
+        ),
+    )
     p.add_argument(
         "--moreau_lams",
         type=float,
