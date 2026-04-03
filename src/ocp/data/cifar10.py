@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Iterable, Optional, Sequence, Tuple
 
@@ -61,6 +62,32 @@ def _filter_first_n_classes(dataset, num_classes: int):
 
     idxs = [i for i, y in enumerate(targets) if int(y) < num_classes]
     return Subset(dataset, idxs)
+
+
+def train_val_split_indices(
+    n: int, val_fraction: float, seed: int
+) -> tuple[list[int], list[int]]:
+    """Split ``range(n)`` into train and validation index lists with a fixed shuffle.
+
+    Both splits are non-empty when ``n >= 2``. The permutation is reproducible for a
+    given ``seed``."""
+    if not (0 < val_fraction < 1):
+        raise ValueError(f"val_fraction must be in (0, 1), got {val_fraction}")
+    if n < 2:
+        raise ValueError(f"Need at least 2 samples to split train/val, got n={n}")
+
+    n_val = int(round(n * val_fraction))
+    n_val = max(1, min(n - 1, n_val))
+
+    perm = list(range(n))
+    rng = random.Random(seed)
+    rng.shuffle(perm)
+
+    val_indices = perm[:n_val]
+    train_indices = perm[n_val:]
+    train_indices.sort()
+    val_indices.sort()
+    return train_indices, val_indices
 
 
 def build_cifar10_datasets(cfg: Cifar10DataConfig):
@@ -131,4 +158,85 @@ def build_cifar10_loaders(cfg: Cifar10DataConfig):
         worker_init_fn=(lambda wid: _seed_worker(wid, cfg.seed)),
     )
     return train_loader, test_loader
+
+
+def build_cifar10_train_val_test_loaders(
+    cfg: Cifar10DataConfig, val_fraction: float
+) -> tuple["DataLoader", "DataLoader", "DataLoader"]:
+    """Build (train_loader, val_loader, test_loader).
+
+    Train and validation are disjoint subsets of the official CIFAR-10 training split
+    (after optional ``num_classes`` filtering). Training uses the same augmentation as
+    :func:`build_cifar10_loaders`; validation uses test-style transforms only (no random
+    crop/flip). """
+    _require_torchvision()
+    import torch
+    from torch.utils.data import DataLoader, Subset
+    from torchvision.datasets import CIFAR10
+
+    if not (0 < val_fraction < 1):
+        raise ValueError(f"val_fraction must be in (0, 1), got {val_fraction}")
+
+    train_ds_aug = CIFAR10(
+        root=cfg.data_dir,
+        train=True,
+        transform=_cifar10_transforms(train=True, augment=cfg.augment),
+        download=cfg.download,
+    )
+    train_ds_eval = CIFAR10(
+        root=cfg.data_dir,
+        train=True,
+        transform=_cifar10_transforms(train=False, augment=False),
+        download=cfg.download,
+    )
+    test_ds = CIFAR10(
+        root=cfg.data_dir,
+        train=False,
+        transform=_cifar10_transforms(train=False, augment=False),
+        download=cfg.download,
+    )
+
+    if cfg.num_classes != 10:
+        train_ds_aug = _filter_first_n_classes(train_ds_aug, cfg.num_classes)
+        train_ds_eval = _filter_first_n_classes(train_ds_eval, cfg.num_classes)
+        test_ds = _filter_first_n_classes(test_ds, cfg.num_classes)
+
+    n_train = len(train_ds_aug)
+    if len(train_ds_eval) != n_train:
+        raise RuntimeError("Augmented and eval-style train datasets must agree in length.")
+
+    train_idx, val_idx = train_val_split_indices(n_train, val_fraction, cfg.seed)
+
+    train_subset = Subset(train_ds_aug, train_idx)
+    val_subset = Subset(train_ds_eval, val_idx)
+
+    g = torch.Generator()
+    g.manual_seed(cfg.seed)
+
+    train_loader = DataLoader(
+        train_subset,
+        batch_size=cfg.batch_size,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+        pin_memory=torch.cuda.is_available(),
+        generator=g,
+        worker_init_fn=(lambda wid: _seed_worker(wid, cfg.seed)),
+    )
+    val_loader = DataLoader(
+        val_subset,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=torch.cuda.is_available(),
+        worker_init_fn=(lambda wid: _seed_worker(wid, cfg.seed)),
+    )
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=cfg.batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+        pin_memory=torch.cuda.is_available(),
+        worker_init_fn=(lambda wid: _seed_worker(wid, cfg.seed)),
+    )
+    return train_loader, val_loader, test_loader
 
