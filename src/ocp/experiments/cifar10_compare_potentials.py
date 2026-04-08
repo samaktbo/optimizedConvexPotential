@@ -3,67 +3,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
 from dataclasses import asdict
 from typing import Dict, List, Literal, Optional
 
 import torch
-from torch import nn
 
 from ocp.data.cifar10 import Cifar10DataConfig, build_cifar10_loaders
-from ocp.models.wrapper import PotentialModel
-from ocp.potentials.logsumexp import LogSumExpPotential
-from ocp.potentials.moreau_max import MoreauMaxPotential
-from ocp.potentials.simplex_entropy_conjugate import SimplexEntropyConjugatePotential
-from ocp.train.loop import eval_one_epoch, train_one_epoch
-
+from ocp.experiments.cifar10_potential_training import (
+    PotentialKind,
+    set_training_seed,
+    train_one_potential,
+)
 
 Which = Literal["logsumexp", "moreau", "simplex_entropy", "both"]
 OptimizerName = Literal["adamw", "sgd"]
-
-
-def _set_seed(seed: int) -> None:
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    try:
-        import numpy as np  # type: ignore
-
-        np.random.seed(seed)
-    except ModuleNotFoundError:
-        pass
-
-
-def _build_resnet18_for_cifar(*, num_classes: int) -> nn.Module:
-    """ResNet-18 with CIFAR-friendly stem (3x3 conv, no initial maxpool)."""
-    try:
-        import torchvision
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(
-            "This experiment requires `torchvision` for ResNet-18. Install it, then re-run."
-        ) from e
-
-    m = torchvision.models.resnet18(num_classes=num_classes)
-    m.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-    m.maxpool = nn.Identity()
-    return m
-
-
-def _make_optimizer(
-    *,
-    name: OptimizerName,
-    params,
-    lr: float,
-    weight_decay: float,
-    momentum: float,
-) -> torch.optim.Optimizer:
-    if name == "adamw":
-        return torch.optim.AdamW(params, lr=lr, weight_decay=weight_decay)
-    if name == "sgd":
-        return torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay, nesterov=True)
-    raise ValueError(f"Unknown optimizer={name!r}")
 
 
 def run_experiment(
@@ -87,7 +40,7 @@ def run_experiment(
     out_jsonl: Optional[str],
     device: Optional[str],
 ) -> List[Dict]:
-    _set_seed(seed)
+    set_training_seed(seed)
 
     if device is None:
         device_t = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -104,83 +57,43 @@ def run_experiment(
         augment=augment,
     )
     train_loader, test_loader = build_cifar10_loaders(data_cfg)
+    data_dict = asdict(data_cfg)
 
-    def _run_one(potential, *, tag: str, extra: Dict) -> Dict:
-        # Re-seed so all runs start from identical init (fair comparison).
-        _set_seed(seed)
-        backbone = _build_resnet18_for_cifar(num_classes=num_classes)
-        model = PotentialModel(backbone, potential).to(device_t)
-
-        opt = _make_optimizer(
-            name=optimizer,
-            params=model.parameters(),
+    def _run_one(
+        *,
+        kind: PotentialKind,
+        lam_i: float,
+        tag: str,
+        extra: Dict,
+    ) -> Dict:
+        return train_one_potential(
+            kind=kind,
+            lam=lam_i,
             lr=lr,
+            num_classes=num_classes,
+            epochs=epochs,
+            train_loader=train_loader,
+            eval_loader=test_loader,
+            optimizer=optimizer,
             weight_decay=weight_decay,
             momentum=momentum,
+            amp=amp,
+            grad_clip_norm=grad_clip_norm,
+            device=device_t,
+            seed=seed,
+            data_dict=data_dict,
+            tag=tag,
+            extra=extra,
+            eval_prefix="test",
+            verbose=True,
         )
-
-        metrics = {
-            "tag": tag,
-            "seed": seed,
-            "device": str(device_t),
-            "data": asdict(data_cfg),
-            "optimizer": {"name": optimizer, "lr": lr, "weight_decay": weight_decay, "momentum": momentum},
-            "epochs": epochs,
-            "amp": bool(amp),
-            "grad_clip_norm": grad_clip_norm,
-            "train_loss": [],
-            "train_acc": [],
-            "test_loss": [],
-            "test_acc": [],
-            **extra,
-        }
-
-        loss_fn = lambda logits, targets: model.loss(logits, targets, reduction="mean")
-
-        # Epoch 0 (before training): evaluate initial model.
-        tr0 = eval_one_epoch(model=model, loader=train_loader, loss_fn=loss_fn, device=device_t)
-        te0 = eval_one_epoch(model=model, loader=test_loader, loss_fn=loss_fn, device=device_t)
-        metrics["train_loss"].append(tr0.loss)
-        metrics["train_acc"].append(tr0.acc)
-        metrics["test_loss"].append(te0.loss)
-        metrics["test_acc"].append(te0.acc)
-        print(
-            f"[{tag}] epoch {0:03d}/{epochs} | "
-            f"train loss {tr0.loss:.4f} acc {tr0.acc:.4f} | "
-            f"test loss {te0.loss:.4f} acc {te0.acc:.4f}"
-        )
-
-        for ep in range(1, epochs + 1):
-            tr = train_one_epoch(
-                model=model,
-                loader=train_loader,
-                optimizer=opt,
-                loss_fn=loss_fn,
-                device=device_t,
-                amp=amp,
-                grad_clip_norm=grad_clip_norm,
-            )
-            te = eval_one_epoch(model=model, loader=test_loader, loss_fn=loss_fn, device=device_t)
-
-            metrics["train_loss"].append(tr.loss)
-            metrics["train_acc"].append(tr.acc)
-            metrics["test_loss"].append(te.loss)
-            metrics["test_acc"].append(te.acc)
-
-            print(
-                f"[{tag}] epoch {ep:03d}/{epochs} | "
-                f"train loss {tr.loss:.4f} acc {tr.acc:.4f} | "
-                f"test loss {te.loss:.4f} acc {te.acc:.4f}"
-            )
-
-        metrics["final_test_acc"] = float(metrics["test_acc"][-1]) if metrics["test_acc"] else None
-        return metrics
 
     results: List[Dict] = []
     if which in ("logsumexp", "both"):
         results.append(
             _run_one(
-                LogSumExpPotential(lam=lam),
+                kind="logsumexp",
+                lam_i=lam,
                 tag="logsumexp",
                 extra={"potential": "logsumexp", "lam": float(lam)},
             )
@@ -190,7 +103,8 @@ def run_experiment(
         for lam_i in lams:
             results.append(
                 _run_one(
-                    MoreauMaxPotential(lam=lam_i),
+                    kind="moreau_max",
+                    lam_i=lam_i,
                     tag=f"moreau_lam{lam_i:g}",
                     extra={"potential": "moreau_max", "lam": float(lam_i)},
                 )
@@ -198,7 +112,8 @@ def run_experiment(
     if which in ("simplex_entropy", "both"):
         results.append(
             _run_one(
-                SimplexEntropyConjugatePotential(lam=lam),
+                kind="simplex_entropy",
+                lam_i=lam,
                 tag="simplex_entropy",
                 extra={"potential": "simplex_entropy_conjugate", "lam": float(lam)},
             )
@@ -286,4 +201,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
